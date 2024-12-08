@@ -1,6 +1,7 @@
 package net.marvk.aocleaderboardplotter
 
 import com.google.gson.Gson
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import org.jetbrains.letsPlot.Stat
 import org.jetbrains.letsPlot.coord.coordFlip
@@ -23,163 +24,145 @@ import org.jetbrains.letsPlot.themes.flavorSolarizedLight
 import org.jetbrains.letsPlot.themes.theme
 import java.nio.file.Files
 import java.nio.file.Paths
-import java.time.Duration
 import java.time.LocalDateTime
+import java.time.Year
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
-import kotlin.math.min
 
 
 data class Member(
     val id: Int,
     val localScore: Int,
-    val lastStarTs: Long,
+    private val lastStarTs: Long,
     val globalScore: Int,
     val stars: Int,
     val name: String,
     val completionDayLevel: List<Day>,
 ) {
-    val lastStar by lazy { lastStarTs.toLocalDate() }
+    val lastStar = lastStarTs.toLocalDate()
 }
 
-data class Day(val index: Int, val parts: List<Part>)
-data class Part(val index: Int, val getStarTs: Long, val starIndex: Long) {
-    val getStar by lazy { getStarTs.toLocalDate() }
+data class Day(
+    val index: Int,
+    val parts: List<Part>,
+)
+
+data class Part(
+    val index: Int,
+    private val getStarTs: Long,
+    val starIndex: Long,
+) {
+    val getStar = getStarTs.toLocalDate()
 }
 
 fun main() {
-    val fromJson = Gson().fromJson(Files.readString(Paths.get("aoc.json")), JsonObject::class.java)
+    val jsonObject = Gson().fromJson(Files.readString(Paths.get("aoc.json")), JsonObject::class.java)
 
-    val members = fromJson.get("members").asJsonObject.entrySet().map { (id, element) ->
+    val year = jsonObject.get("event").asString.let(Year::parse)
 
-        val o = element.asJsonObject
-
-
-        val Days = o.get("completion_day_level").asJsonObject.entrySet().map { (dayId, day) ->
-            val i = dayId.toInt()
-
-            i to Day(i,
-                listOf(1, 2).mapNotNull {
-                    day.asJsonObject.get(it.toString())?.asJsonObject?.toPart(it)
-                }
-            )
-        }.sortedBy { it.first }
-            .map { it.second }
-
-
-        Member(
-            id.toInt(),
-            o.get("local_score").asInt,
-            o.get("last_star_ts").asLong,
-            o.get("global_score").asInt,
-            o.get("stars").asInt,
-            o.get("name").asString,
-            Days,
-        )
-    }.sortedBy { it.name.lowercase() }
-
-//    members.first { it.name.contains("ilia", ignoreCase = true) }.also {
-//        it.completionDayLevel.forEach {
-//            println(it.index)
-//            it.parts.forEach { part ->
-//                println(part)
-//                println(part.getStar)
-//                println()
-//            }
-//            println("---".repeat(100))
-//        }
-//    }
+    val members =
+        jsonObject
+            .get("members")
+            .asJsonObject
+            .entrySet()
+            .map { (id, element) -> parseMember(element, id) }
+            .sortedBy { it.name.lowercase() }
 
     val date: ZonedDateTime = members.maxOf { it.lastStar }.atZone(ZoneId.of("UTC")).withZoneSameInstant(ZoneId.of("+1"))
 
-    plotA(members, date)
-    plotB(members, date)
-    plotC(members, date)
-    plotD(members, date)
-//    plotSus(members)
+    Plotter(members, date, year).run {
+        plotA()
+        plotB()
+        plotC()
+        plotD()
+    }
 }
 
-private fun plotSus(members: List<Member>) {
-    val n = 25
+private class Plotter(
+    private val members: List<Member>,
+    private val date: ZonedDateTime?,
+    private val year: Year,
+) {
+    private val numberOfDays = members.map { it.completionDayLevel }.maxOf { it.size }
 
-    val data: MutableMap<Any, Any> = mutableMapOf(
-        "Day" to (1..n).toList()
-    )
+    fun plotA() {
+        val data: Map<String, List<Any>> = createData(members);
 
-    fun generate(name: String): List<Long> {
-        val r = (1..n)
-            .map { members.single { it.name == name }.completionDayLevel.getOrNull(it - 1) }
-            .map {
-                it?.takeIf { it.parts.size == 2 }?.let {
-                    min(Duration.between(it.parts[0].getStar, it.parts[1].getStar).seconds, 25000)
-                } ?: 0
-            }
+        val p =
+            letsPlot(data) { x = "HoursToComplete"; y = "Y"; color = "Name" } +
+                    ggsize(1000, 1000) +
+                    scaleXContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
+                    scaleYContinuous(breaks = (0..numberOfDays).map { it + 0.25 }, labels = (0..numberOfDays).map { (1 + it).toString() }, name = "Day") +
+                    geomPoint(size = 4) { shape = "Name" } +
+                    ggtitle("IITS Advent of Code $year (Stand ${date})") +
+                    flavorDarcula()
 
-        data += name to r
-        data += name.uppercase() to List(n) { name }
-
-        return r
+        ggsave(p, "plot.png", path = ".")
     }
 
-    generate("krankkk").map(Duration::ofSeconds).withIndex().forEach(::println)
+    fun plotB() {
+        val data = createData(members.reversed());
 
-    val names = listOf("krankkk", "jtheegarten-iits", "marvk", "sschellhoff", "kmees", "Andreas Schröder", "Igor")
+        val p =
+            letsPlot(data) { x = "Name"; y = "CompletedAtHourOfDay" } +
+                    scaleYContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
+                    ggsize(1000, 1000) +
+                    geomBoxplot { fill = "Name"; } +
+                    ggtitle("IITS Advent of Code $year (Stand ${date})") +
+                    theme().legendPositionNone() +
+                    flavorSolarizedLight() +
+                    coordFlip()
 
-    for (name in names) generate(name)
-
-    var p = letsPlot(data) { x = "Day" } +
-            ggsize(1200, 500) +
-//            scaleXDiscrete(name = "Day", breaks = (1..n).toList(), labels = (1..n).map(Int::toString).toList()) +
-            scaleColorManual(listOf("dark_green", "orange"), naValue = "gray", name = "Part") +
-            scaleFillDiscrete(name = "") +
-            scaleYDiscrete(name = "Seconds")
-
-    for ((i, name) in names.withIndex()) {
-        p = p + geomBar(stat = Stat.identity, width = 0.8 / names.size, position = positionNudge(-0.4 + (0.8 / names.size) * i)) { y = name; fill = name.uppercase() }
+        ggsave(p, "plot2.png", path = ".")
     }
 
-    p = p + theme().legendPositionTop() +
-            flavorSolarizedLight()
 
+    fun plotC() {
+        val data = createData(members.reversed());
 
-    ggsave(p, "sus.png", path = ".")
-}
+        val p =
+            letsPlot(data) { x = "Day"; y = "CompletedAtHourOfDay" } +
+                    scaleYContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
+                    scaleXContinuous(breaks = (0..numberOfDays).map { it }, labels = (0..numberOfDays).map { (it).toString() }, name = "Day") +
+                    ggsize(1000, 1000) +
+                    geomBoxplot { fill = "Day" } +
+                    ggtitle("IITS Advent of Code $year (Stand ${date})") +
+                    theme().legendPositionNone() +
+                    flavorSolarizedLight() +
+                    coordFlip()
 
-private fun plotD(members: List<Member>, date: ZonedDateTime?) {
-    val eachCount = countStarsPerDayAndPart(members)
-
-    for (e in eachCount) {
-        println(e)
+        ggsave(p, "plot3.png", path = ".")
     }
 
-    val n = 25
-    val part1 = eachCount.map { (_, v) -> v[1]!! }
-    val part2 = eachCount.map { (_, v) -> v[2]!! }
-    val data = mapOf(
-        "Day" to eachCount.map { (k, _) -> k },
-        "Part1" to part1,
-        "Part2" to part2,
-        "Part 1" to List(n) { "Part 1" },
-        "Part 2" to List(n) { "Part 2" },
-    )
+    fun plotD() {
+        val eachCount = countStarsPerDayAndPart(members)
 
-    for (datum in data) {
-        println(datum)
+        val n = 25
+        val part1 = eachCount.map { (_, v) -> v[1]!! }
+        val part2 = eachCount.map { (_, v) -> v[2]!! }
+        val data = mapOf(
+            "Day" to eachCount.map { (k, _) -> k },
+            "Part1" to part1,
+            "Part2" to part2,
+            "Part 1" to List(n) { "Part 1" },
+            "Part 2" to List(n) { "Part 2" },
+        )
+
+        val p = letsPlot(data) { x = "Day" } +
+                ggsize(1000, 1000) +
+                scaleXDiscrete(name = "Day", breaks = (1..n).toList(), labels = (1..n).map(Int::toString).toList()) +
+                scaleColorManual(listOf("dark_green", "orange"), naValue = "gray", name = "Part") +
+                scaleFillDiscrete(name = "") +
+                scaleYDiscrete(name = "Stars") +
+                geomBar(stat = Stat.identity, width = 0.4, position = positionNudge(-0.2), showLegend = false) { y = "Part1"; fill = "Part 1" } +
+                geomBar(stat = Stat.identity, width = 0.4, position = positionNudge(0.2)) { y = "Part2"; fill = "Part 2" } +
+                ggtitle("IITS Advent of Code $year (Stand ${date})") +
+                theme().legendPositionTop() +
+                flavorSolarizedLight()
+
+        ggsave(p, "plot4.png", path = ".")
     }
-
-    val p = letsPlot(data) { x = "Day" } +
-            ggsize(1000, 1000) +
-            scaleXDiscrete(name = "Day", breaks = (1..n).toList(), labels = (1..n).map(Int::toString).toList()) +
-            scaleColorManual(listOf("dark_green", "orange"), naValue = "gray", name = "Part") +
-            scaleFillDiscrete(name = "") +
-            scaleYDiscrete(name = "Stars") +
-            geomBar(stat = Stat.identity, width = 0.4, position = positionNudge(-0.2), showLegend = false) { y = "Part1"; fill = "Part 1" } +
-            geomBar(stat = Stat.identity, width = 0.4, position = positionNudge(0.2)) { y = "Part2"; fill = "Part 2" } +
-            theme().legendPositionTop() +
-            flavorSolarizedLight()
-
-    ggsave(p, "plot4.png", path = ".")
 }
 
 private fun countStarsPerDayAndPart(members: List<Member>): Map<Int, Map<Int, Int>> {
@@ -195,81 +178,6 @@ private fun countStarsPerDayAndPart(members: List<Member>): Map<Int, Map<Int, In
     return eachCount.toMap()
 }
 
-private fun plotA(members: List<Member>, date: ZonedDateTime?) {
-    val data: Map<String, List<Any>> = createData(members);
-
-    (0 until data.entries.first().value.size).map { i ->
-        data.entries.map { it.key + ": " + it.value[i] }
-    }.forEach(::println)
-
-    val numberOfDays = members.map { it.completionDayLevel }.maxOf { it.size }
-
-    var p =
-        letsPlot(data) { x = "HoursToComplete"; y = "Y"; color = "Name" } +
-                ggsize(1000, 1000) +
-                scaleXContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
-                scaleYContinuous(breaks = (0..numberOfDays).map { it + 0.25 }, labels = (0..numberOfDays).map { (1 + it).toString() }, name = "Day") +
-                geomPoint(size = 4) { shape = "Name" } +
-                ggtitle("IITS Advent of Code 2022 (Stand ${date})") +
-                flavorDarcula()
-
-    ggsave(p, "plot.png", path = ".")
-}
-
-private fun plotB(members: List<Member>, date: ZonedDateTime) {
-    val data = createData(members.reversed());
-
-    var p2 =
-        letsPlot(data) { x = "Name"; y = "CompletedAtHourOfDay" } +
-                scaleYContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
-                ggsize(1000, 1000) +
-                geomBoxplot { fill = "Name"; } +
-                ggtitle("IITS Advent of Code 2022 (Stand ${date})") +
-                theme().legendPositionNone() +
-                flavorSolarizedLight() +
-                coordFlip()
-
-    ggsave(p2, "plot2.png", path = ".")
-}
-
-
-private fun plotC(members: List<Member>, date: ZonedDateTime) {
-    val data = createData(members.reversed());
-    val numberOfDays = members.map { it.completionDayLevel }.maxOf { it.size }
-
-    var p2 =
-        letsPlot(data) { x = "Day"; y = "CompletedAtHourOfDay" } +
-                scaleYContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
-                scaleXContinuous(breaks = (0..numberOfDays).map { it }, labels = (0..numberOfDays).map { (it).toString() }, name = "Day") +
-                ggsize(1000, 1000) +
-                geomBoxplot { fill = "Day" } +
-                ggtitle("IITS Advent of Code 2022 (Stand ${date})") +
-                theme().legendPositionNone() +
-                flavorSolarizedLight() +
-                coordFlip()
-
-    ggsave(p2, "plot3.png", path = ".")
-}
-
-//private fun plotD(members: List<Member>, date: ZonedDateTime) {
-//    val data = createData(members.reversed());
-//    val numberOfDays = members.map { it.completionDayLevel }.maxOf { it.size }
-//
-//    var p2 =
-//        letsPlot(data) { x = "Day"; y = "CompletedAtHourOfDay" } +
-//                scaleYContinuous(breaks = listOf(0, 6, 12, 18, 24), labels = listOf("6", "12", "18", "24", "6"), limits = 0 to 24, name = "Hour") +
-//                scaleXContinuous(breaks = (0..numberOfDays).map { it }, labels = (0..numberOfDays).map { (it).toString() }, name = "Day") +
-//                ggsize(1000, 1000) +
-//                geomBoxplot { fill = "Day" } +
-//                ggtitle("IITS Advent of Code 2022 (Stand ${date})") +
-//                theme().legendPositionNone() +
-//                flavorSolarizedLight() +
-//                coordFlip()
-//
-//    ggsave(p2, "plot3.png", path = ".")
-//}
-
-
 private fun createData(members: List<Member>) =
     mapOf(
         "Name" to members.flatMap { member ->
@@ -278,13 +186,13 @@ private fun createData(members: List<Member>) =
 
         "HoursToComplete" to members.flatMap { member ->
             member.completionDayLevel
-                .map { it.index to it.parts.map { it.getStar } }
+                .map { it.index to it.parts.map(Part::getStar) }
                 .flatMap { (index, list) -> list.map { 24 * (it.dayOfMonth - index) + ((it.hour + (it.minute / 60.0) + (it.second / 3600) - 5) % 24) } }
         },
 
         "CompletedAtHourOfDay" to members.flatMap { member ->
             member.completionDayLevel
-                .map { it.index to it.parts.map { it.getStar } }
+                .map { it.index to it.parts.map(Part::getStar) }
                 .flatMap { (index, list) -> list.map { 24 * (it.dayOfMonth - index) + ((it.hour + (it.minute / 60.0) + (it.second / 3600) - 5) % 24) } }
         },
 
@@ -302,6 +210,33 @@ private fun createData(members: List<Member>) =
             member.completionDayLevel.flatMap { it.parts }.map { it.index }
         }
     )
+
+private fun parseMember(element: JsonElement, id: String): Member {
+    val o = element.asJsonObject
+
+    val days = o.get("completion_day_level").asJsonObject.entrySet().map { (dayId, day) ->
+        val i = dayId.toInt()
+
+        i to Day(
+            i,
+            listOf(1, 2).mapNotNull {
+                day.asJsonObject.get(it.toString())?.asJsonObject?.toPart(it)
+            }
+        )
+    }.sortedBy { it.first }
+        .map { it.second }
+
+
+    return Member(
+        id.toInt(),
+        o.get("local_score").asInt,
+        o.get("last_star_ts").asLong,
+        o.get("global_score").asInt,
+        o.get("stars").asInt,
+        o.get("name").asString,
+        days,
+    )
+}
 
 private fun Long.toLocalDate(): LocalDateTime = LocalDateTime.ofEpochSecond(this, 0, ZoneOffset.UTC)
 
