@@ -41,12 +41,48 @@ data class Member(
     val completionDayLevel: List<Day>,
 ) {
     val lastStar = lastStarTs.toLocalDate()
+
+    companion object {
+        fun parse(element: JsonElement, id: String): Member {
+            val o = element.asJsonObject
+
+            val days =
+                o.get("completion_day_level")
+                    .asJsonObject
+                    .asMap()
+                    .mapKeys { it.key.toInt() }
+                    .map { (dayId, day) -> dayId to Day.parse(day, dayId) }
+                    .sortedBy { it.first }
+                    .map { it.second }
+
+            return Member(
+                id.toInt(),
+                o.get("local_score").asInt,
+                o.get("last_star_ts").asLong,
+                o.get("global_score").asInt,
+                o.get("stars").asInt,
+                o.get("name").asString,
+                days,
+            )
+        }
+    }
 }
 
 data class Day(
     val index: Int,
     val parts: List<Part>,
-)
+) {
+    companion object {
+        fun parse(jsonElement: JsonElement, index: Int) =
+            Day(
+                index,
+                listOf(1, 2).mapNotNull { i ->
+                    jsonElement.asJsonObject
+                        .get(i.toString())?.asJsonObject?.let { Part.parse(it, i) }
+                }
+            )
+    }
+}
 
 data class Part(
     val index: Int,
@@ -54,30 +90,18 @@ data class Part(
     val starIndex: Long,
 ) {
     val getStar = getStarTs.toLocalDate()
-}
 
-fun main() {
-    val jsonObject = Gson().fromJson(Files.readString(Paths.get("aoc.json")), JsonObject::class.java)
-
-    val year = jsonObject.get("event").asString.let(Year::parse)
-
-    val members =
-        jsonObject
-            .get("members")
-            .asJsonObject
-            .entrySet()
-            .map { (id, element) -> parseMember(element, id) }
-            .sortedBy { it.name.lowercase() }
-
-    val date: ZonedDateTime = members.maxOf { it.lastStar }.atZone(ZoneId.of("UTC")).withZoneSameInstant(ZoneId.of("+1"))
-
-    Plotter(members, date, year).run {
-        plotA()
-        plotB()
-        plotC()
-        plotD()
+    companion object {
+        fun parse(jsonObject: JsonObject, index: Int) =
+            Part(
+                index,
+                jsonObject.get("get_star_ts").asLong,
+                jsonObject.get("star_index").asLong,
+            )
     }
 }
+
+private fun Long.toLocalDate(): LocalDateTime = LocalDateTime.ofEpochSecond(this, 0, ZoneOffset.UTC)
 
 private class Plotter(
     private val members: List<Member>,
@@ -211,39 +235,25 @@ private fun createData(members: List<Member>) =
         }
     )
 
-private fun parseMember(element: JsonElement, id: String): Member {
-    val o = element.asJsonObject
+fun main() {
+    val jsonObject = Gson().fromJson(Files.readString(Paths.get("aoc.json")), JsonObject::class.java)
 
-    val days = o.get("completion_day_level").asJsonObject.entrySet().map { (dayId, day) ->
-        val i = dayId.toInt()
+    val year = jsonObject.get("event").asString.let(Year::parse)
 
-        i to Day(
-            i,
-            listOf(1, 2).mapNotNull {
-                day.asJsonObject.get(it.toString())?.asJsonObject?.toPart(it)
-            }
-        )
-    }.sortedBy { it.first }
-        .map { it.second }
+    val members =
+        jsonObject
+            .get("members")
+            .asJsonObject
+            .entrySet()
+            .map { (id, element) -> Member.parse(element, id) }
+            .sortedBy { it.name.lowercase() }
 
+    val date: ZonedDateTime = members.maxOf { it.lastStar }.atZone(ZoneId.of("UTC")).withZoneSameInstant(ZoneId.of("+1"))
 
-    return Member(
-        id.toInt(),
-        o.get("local_score").asInt,
-        o.get("last_star_ts").asLong,
-        o.get("global_score").asInt,
-        o.get("stars").asInt,
-        o.get("name").asString,
-        days,
-    )
+    Plotter(members, date, year).run {
+        plotA()
+        plotB()
+        plotC()
+        plotD()
+    }
 }
-
-private fun Long.toLocalDate(): LocalDateTime = LocalDateTime.ofEpochSecond(this, 0, ZoneOffset.UTC)
-
-private fun JsonObject.toPart(index: Int) =
-    Part(
-        index,
-        get("get_star_ts").asLong,
-        get("star_index").asLong,
-    )
-
